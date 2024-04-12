@@ -155,9 +155,17 @@ def test(model, device, dataset, writer, epoch):
         mse = train_linear_regressor(train_data, test_data, device, lr=1e-2, weight_decay=1e-4)
         return mse
     
-    data = next(iter(DataLoader(dataset, batch_size=len(dataset), shuffle=False)))
+    keys = list(dataset.annotations.keys())
+    data = {}
+    for batch in DataLoader(dataset, batch_size=4, shuffle=False):
+      for key in keys:
+        if len(data.keys()) < len(keys):
+          data[key] = batch[key]
+        else:
+          data[key] = torch.cat([data[key], batch[key]], axis=0)
+
     for target_tag in dataset.eval_utils['classification_tags']:
-        target = torch.LongTensor(data[target_tag])
+        target = data[target_tag].type(torch.LongTensor)
         global_pool = dataset.eval_utils['sequence_level_dict'][target_tag]
         f1_score, cm = decode_class(emb_keys, target, global_pool=global_pool)
         emb_tag = '_'.join(emb_keys)
@@ -249,10 +257,9 @@ def main():
             args.log_every_step,
         )
         scheduler.step()
-        torch.save(model.state_dict(), model_name + ".pt")
-        if epoch % 100 == 1:
-            test(model, device, dataset, writer, epoch)
+        if epoch % 50 == 1:
             torch.save(model.state_dict(), model_name + ".pt")
+            test(model, device, dataset, writer, epoch)
 
 
 if __name__ == "__main__":

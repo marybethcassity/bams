@@ -18,6 +18,10 @@ from bams import HoALoss
 
 
 def load_data(path):
+    '''
+    Load and format keypoint data. Output should be in the shape (n_samples, seq_len, num_feats). 
+    Collapse xy coordinates into the single num_feats dimension.
+    '''
     keypoints = ...
     return keypoints
 
