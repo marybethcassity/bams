@@ -27,6 +27,10 @@ class Dataset(CachedDataset):
         hoa_window (int): Window size for the histograms of actions.
         cache_path (str): Path to the cache file.
         cache (bool): Whether to use the cache file.
+        annotations (dict): ability to load labels/annotations in the following dictionary format: 
+                            {'video_name': [str], 'label1': [int/float], 'label2': [int/float], ...}. 
+                            Labels can have any name. The video_name key is optional, and is used to keep 
+                            track of the video name for each sample.
     """
 
     def __init__(
