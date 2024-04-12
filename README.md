@@ -66,10 +66,15 @@ python3 round1_evaluator.py --task mouse --submission ../bams-mouse-triplet-2023
 ```
 
 ## Custom datasets
-If you'd like to test BAMS on your own dataset, please use `custom_dataset.py`. 
+If you'd like to train BAMS on your own dataset, you may use `custom_dataset.py` or `custom_dataset_w_labels.py`. `custom_dataset.py` 
+allows you to train BAMS in the most simple way, and only requires loading in your keypoints. `custom_dataset_w_labels.py` has the added functionality of evaluating your model on downstream classification or regression tasks during training and saving them to tensorboard. For this approach you must also load in your annotations as well as some metadata (further directions in `custom_dataset_w_labels.py`). 
 
 ### 1. Model training
-To train a model, you will need to simply load your `keypoints` object which should be of shape `(n_samples, seq_len, num_feats)`. 
+To train a model using `custom_dataset.py`, you will need to simply load your `keypoints` object which should be of shape `(n_samples, seq_len, num_feats)`. Fill in the `load_data()` function at the top of `custom_dataset.py`.
+
+To train a model using `custom_dataset_w_labels.py`, you will need to load your `keypoints` object which should be of shape `(n_samples, seq_len, num_feats)`. You must also load in your annotations/labels. This script supports linear readouts of behavior for both **frame-level** (labeled per frame) and **sequence-level** (labeled per sequence) labels. Your annotations should be loaded in a specific dictionary format, specified in `custom_dataset_w_labels.py`. You must specify whether each label should be classified or regressed and is frame or sequence-level in the given format. Fill in the `load_data()` and  `load_annotations()` functions at the top of `custom_dataset_w_labels.py`.
+
+This script will automatically fit a linear classifier or regressor to each label, either per sequence or per frame depending on the timescale of the labels. Confusion matrices and regression loss will be directly saved to tensorboard.
 
 **Note:**  If you have missing values, or need to pad your data to the same length, please use `np.nan`
 as the missing value.
@@ -80,3 +85,6 @@ as the missing value.
 embs, hoa_pred, byol_preds = model(input)
 ```
 embs is a dict with embs['short_term'] and embs['long_term'] containing both the short-term and long-term latent embeddings
+
+## Example notebooks
+We have included an example notebook, `visualize_latents.ipynb`, which illustrates how you can visualize BAMS embeddings using PCA to gain further insight into your data.

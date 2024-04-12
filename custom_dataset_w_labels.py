@@ -1,8 +1,11 @@
 import os
 import numpy as np
 import argparse
+import seaborn as sn
+import pandas as pd
 from datetime import datetime
-
+import sklearn
+from sklearn.model_selection import train_test_split
 
 import torch
 import torch.nn.functional as F
@@ -11,10 +14,11 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 from bams.data import KeypointsDataset
 from bams.models import BAMS
-from bams import HoALoss
+from bams import HoALoss, compute_representations, train_linear_classfier, train_linear_regressor
 
 
 def load_data(path):
@@ -25,6 +29,26 @@ def load_data(path):
     keypoints = ...
     return keypoints
 
+def load_annotations(path):
+    '''
+    load labels/annotations in the following dictionary format:
+    annotations = {'video_name': [str], 'label1': [int/float], 'label2': [int/float], ...}
+    
+    Your labels can have any name. The video_name key is optional, and is used to keep track of the video name for each sample.
+
+    In addition, create an eval_utils dictionary with the following format:
+    eval_utils = {'classification_tags': [str], 'regression_tags': [str], 'sequence_level_dict': {'label1': True/False, 'label2': True/False, ...}}
+
+    This dictionary contains the necessary metadata for evaluating the model. The classification_tags list contains the names of all
+    classification labels, the regression_tags list contains the names of all regression labels, and the sequence_level_dict contains
+    the names of all labels and whether they are sequence level or not. Enter True if the label is a sequence level label, and False 
+    if it is frame level. Ensure the label names in the classification_tags and regression_tags lists match the names of the labels in
+    the annotations dictionary.
+    '''
+
+    annotations = {'video_name': ..., 'label1': ..., 'label2': ...}
+    eval_utils = {'classification_tags': ..., 'regression_tags': ..., 'sequence_level_dict': ...}
+    return annotations, eval_utils
 
 def train(model, device, loader, optimizer, criterion, writer, step, log_every_step):
     model.train()
@@ -95,6 +119,65 @@ def train(model, device, loader, optimizer, criterion, writer, step, log_every_s
 
     return step
 
+def test(model, device, dataset, writer, epoch):
+    test_idx, train_idx = train_test_split(np.arange(len(dataset)), test_size=0.8, random_state=42)
+    # get embeddings
+    embeddings = compute_representations(model, dataset, device)
+    emb_keys = ['short_term', 'long_term']
+    # decode from all embeddings
+    def decode_class(keys, target, global_pool=False):
+        if len(keys) == 1:
+            emb = embeddings[keys[0]]
+        else:
+            emb = torch.cat([embeddings[key] for key in keys], dim=2)
+        emb_size = emb.size(2)
+
+        if global_pool:
+            emb = torch.mean(emb, dim=1, keepdim=True)
+
+        train_data = [emb[train_idx].reshape(-1, emb_size), target[train_idx].reshape(-1)]
+        test_data = [emb[test_idx].reshape(-1, emb_size), target[test_idx].reshape(-1)]
+        f1_score, cm = train_linear_classfier(target.max()+1, train_data, test_data, device, lr=1e-2, weight_decay=1e-4)
+        return f1_score, cm
+
+    def decode_scalar(keys, target, global_pool=False):
+        if len(keys) == 1:
+            emb = embeddings[keys[0]]
+        else:
+            emb = torch.cat([embeddings[key] for key in keys], dim=2)
+        emb_size = emb.size(2)
+
+        if global_pool:
+            emb = torch.mean(emb, dim=1, keepdim=True)
+
+        train_data = [emb[train_idx].reshape(-1, emb_size), target[train_idx].reshape(-1, 1)]
+        test_data = [emb[test_idx].reshape(-1, emb_size), target[test_idx].reshape(-1, 1)]
+        mse = train_linear_regressor(train_data, test_data, device, lr=1e-2, weight_decay=1e-4)
+        return mse
+    
+    keys = list(dataset.annotations.keys())
+    data = {}
+    for batch in DataLoader(dataset, batch_size=4, shuffle=False):
+      for key in keys:
+        if len(data.keys()) < len(keys):
+          data[key] = batch[key]
+        else:
+          data[key] = torch.cat([data[key], batch[key]], axis=0)
+
+    for target_tag in dataset.eval_utils['classification_tags']:
+        target = data[target_tag].type(torch.LongTensor)
+        global_pool = dataset.eval_utils['sequence_level_dict'][target_tag]
+        f1_score, cm = decode_class(emb_keys, target, global_pool=global_pool)
+        emb_tag = '_'.join(emb_keys)
+        writer.add_scalar(f'test/f1_{target_tag}_{emb_tag}', f1_score, epoch)
+        writer.add_figure(f'{target_tag}_{emb_tag}', sn.heatmap(pd.DataFrame(cm), annot=True).get_figure(), epoch)
+
+    for target_tag in dataset.eval_utils['regression_tags']:
+        target = torch.FloatTensor(data[target_tag].float())
+        global_pool = dataset.eval_utils['sequence_level_dict'][target_tag]
+        mse = decode_scalar(emb_keys, target, global_pool=global_pool)
+        emb_tag = '_'.join(emb_keys)
+        writer.add_scalar(f'test/mse_{target_tag}_{emb_tag}', mse, epoch)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -111,14 +194,17 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # dataset
+    # data
     keypoints = load_data(args.data_root)
+    annotations, eval_utils = load_annotations(args.data_root)
 
     dataset = KeypointsDataset(
         keypoints=keypoints,
         hoa_bins=args.hoa_bins,
         cache_path=args.cache_path,
         cache=False,
+        annotations=annotations,
+        eval_utils=eval_utils
     )
     print("Number of sequences:", len(dataset))
 
@@ -171,9 +257,9 @@ def main():
             args.log_every_step,
         )
         scheduler.step()
-
-        if epoch % 100 == 0:
+        if epoch % 50 == 1:
             torch.save(model.state_dict(), model_name + ".pt")
+            test(model, device, dataset, writer, epoch)
 
 
 if __name__ == "__main__":

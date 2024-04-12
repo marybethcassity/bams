@@ -27,6 +27,10 @@ class Dataset(CachedDataset):
         hoa_window (int): Window size for the histograms of actions.
         cache_path (str): Path to the cache file.
         cache (bool): Whether to use the cache file.
+        annotations (dict): ability to load labels/annotations in the following dictionary format: 
+                            {'video_name': [str], 'label1': [int/float], 'label2': [int/float], ...}. 
+                            Labels can have any name. The video_name key is optional, and is used to keep 
+                            track of the video name for each sample.
     """
 
     def __init__(
@@ -39,6 +43,8 @@ class Dataset(CachedDataset):
         hoa_window=30,
         cache_path=None,
         cache=False,
+        annotations=None,
+        **kwargs,
     ):
         self.input_feats = input_feats
         self.target_feats = target_feats
@@ -52,6 +58,10 @@ class Dataset(CachedDataset):
         self.hoa_window = hoa_window
         cache_path = "./data/tmp" if cache_path is None else cache_path
         cache_path = cache_path + f"_bins{self.hoa_bins}.pkl"
+
+        self.annotations = annotations
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
         super().__init__(cache_path, cache)
 
@@ -128,6 +138,9 @@ class Dataset(CachedDataset):
             ignore_frames=self.ignore_frames[item],
             ignore_weights=weights,
         )
+        if self.annotations is not None:
+            for key in self.annotations:
+                data[key] = self.annotations[key][item]
         return data
 
     def __len__(self):
