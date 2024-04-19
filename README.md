@@ -55,14 +55,16 @@ tensorboard --logdir runs
 
 To compute the learned representations and save them to a file, run:
 ```bash
-python3 mouse_triplets.py --job compute_representations --ckpt_path ./bams-mouse-triplet-2023-12-04-14-42-44.pt
+python3 mouse_triplets.py --job compute_representations --ckpt_path ./bams-mouse-triplet-[datetime].pt
 ```
+Note that you will have to adjust the filename, since each checkpoint (and sumbmission) name contains [datetime].
+
 ### 3. Linear evaluation 
 For linear evaluation of the learned representations, we will use the public
 MABe evaluator:
 ```bash
 cd mabe-2022-public-evaluator/
-python3 round1_evaluator.py --task mouse --submission ../bams-mouse-triplet-2023-11-30-17-49-59_submission.npy --labels ../data/mabe/mouse_triplets_test_labels.npy
+python3 round1_evaluator.py --task mouse --submission ../bams-mouse-triplet-[datetime]_submission.npy --labels ../data/mabe/mouse_triplets_test_labels.npy
 ```
 
 ## Custom datasets
