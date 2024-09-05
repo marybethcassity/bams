@@ -21,13 +21,122 @@ from bams.models import BAMS
 from bams import HoALoss, compute_representations, train_linear_classfier, train_linear_regressor
 
 
-def load_data(path):
+def load_data(path, output_folder, create_csv = True):
     '''
     Load and format keypoint data. Output should be in the shape (n_samples, seq_len, num_feats). 
     Collapse xy coordinates into the single num_feats dimension.
     '''
-    keypoints = ...
-    return keypoints
+
+    import os
+    import numpy as np
+    import pandas as pd
+
+    all_keypoints_reshaped = []
+    video_names = []
+    labels = []
+    chunks_per_video = []
+    minutes = 2
+    fps = 30
+
+    frames = minutes * fps * 60
+
+    # Iterate through each subfolder in the main folder
+    for subfolder in os.listdir(path):
+        subfolder_path = os.path.join(path, subfolder)
+        if os.path.isdir(subfolder_path):
+            # Iterate through each file in the subfolder
+            for filename in os.listdir(subfolder_path):
+                if filename.endswith('.csv'):
+                    file_path = os.path.join(subfolder_path, filename)
+                    
+                    # Extract video name (assuming the filename is the video name)
+                    video_name = os.path.splitext(filename)[0]
+                    print(f"Processing video: {video_name}")
+
+                    # Load data from CSV. Skip the first three rows to just get the x,y data
+                    df = pd.read_csv(file_path, skiprows=3, header=None, low_memory=False)
+                    #midpoint = len(df) // 4
+
+                    # Skip the first column (frame number)
+                    keypoint_data = df.iloc[:, 1:]
+
+                    # Get x and y
+                    x = keypoint_data.values[:, 0::3]
+                    y = keypoint_data.values[:, 1::3]
+                    likelihoods = keypoint_data.values[:, 2::3]
+
+                    mask = likelihoods >= 0.1
+
+                    x_mean = np.array([np.nanmean(np.where(mask_row, x_row, x_row)) if not np.any(mask_row) else np.nanmean(np.where(mask_row, x_row, np.nan))
+                                    for mask_row, x_row in zip(mask, x)])
+                    y_mean = np.array([np.nanmean(np.where(mask_row, y_row, y_row)) if not np.any(mask_row) else np.nanmean(np.where(mask_row, y_row, np.nan))
+                                    for mask_row, y_row in zip(mask, y)])
+
+                    x = x - x_mean[:, np.newaxis]
+                    y = y - y_mean[:, np.newaxis]
+
+                    print("x: ", x)
+                    print("y: ", y)
+
+                    # Stack x and y coordinates
+                    keypoints = np.stack((x, y), axis=-1)
+
+                    # Calculate the number of samples and features
+                    n_samples = keypoints.shape[0]
+                    num_keypoints = keypoints.shape[1]
+                    num_feats = keypoints.shape[2]
+
+                    # Debugging 
+                    
+                    print(f"Number of samples: {n_samples}")
+                    print(f"Number of keypoints: {num_keypoints}")
+                    print(f"keypoints shape: {np.shape(keypoints)}")
+                    print(f"Number of features: {num_feats}")
+
+                    chunk_count = 0
+
+                    # Break keypoints into chunks of size `frames`
+                    for start in range(0, n_samples, frames):
+                        end = start + frames
+                        if end > n_samples:
+                            break
+                        chunk = keypoints[start:end]
+                        keypoints_reshaped = chunk.reshape((frames, num_keypoints * num_feats))
+                        all_keypoints_reshaped.append(keypoints_reshaped)
+                        video_names.append(video_name)
+                        labels.append(subfolder)  # Append the name of the subfolder to labels
+                        chunk_count += 1
+                    
+                    #print(f"keypoints_reshaped shape: {np.shape(keypoints_reshaped)}")
+                    
+                    print(f"Number of chunks: {chunk_count}")
+                    chunks_per_video.extend([chunk_count] * chunk_count)
+
+    # Convert list to numpy array
+    all_keypoints_reshaped = np.array(all_keypoints_reshaped)
+    
+    print(f"All keypoints reshaped shape: {all_keypoints_reshaped.shape}")
+    #print("All keypoints reshaped:")
+    #print(all_keypoints_reshaped)
+
+    if create_csv:
+        print("CREATING CSV")
+    # Write video_names and labels to a CSV file
+        df_labels = pd.DataFrame({
+            'video_name': video_names,
+            'label': labels,
+            'chunks_per_video': chunks_per_video
+        })
+        df_labels.to_csv(os.path.join(output_folder, 'video_labels.csv'), index=False)
+        print("labels written to: ", os.path.join(output_folder, 'video_labels.csv'))
+    
+    #input("Press Enter to proceed to training or CTRL+C to cancel")
+
+    return all_keypoints_reshaped
+    
+    # keypoints = ...
+    # return keypoints
+
 
 def load_annotations(path):
     '''
@@ -45,9 +154,22 @@ def load_annotations(path):
     if it is frame level. Ensure the label names in the classification_tags and regression_tags lists match the names of the labels in
     the annotations dictionary.
     '''
+    df = pd.read_csv(path)
+    
+    num_segments = len(df)
+    unique_labels = df['label'].unique()
+    label_mapping = {label: index for index, label in enumerate(unique_labels)}
 
-    annotations = {'video_name': ..., 'label1': ..., 'label2': ...}
-    eval_utils = {'classification_tags': ..., 'regression_tags': ..., 'sequence_level_dict': ...}
+    annotations = {
+        'video_name': df['label'].tolist(),
+        'label1': [label_mapping[label] for label in df['label']]
+    }
+
+    eval_utils = {
+        'classification_tags': ['label1'],
+        'regression_tags': ['label1'],
+        'sequence_level_dict': {'label1': True}
+    }
     return annotations, eval_utils
 
 def train(model, device, loader, optimizer, criterion, writer, step, log_every_step):
@@ -184,19 +306,21 @@ def main():
     parser.add_argument("--data_root", type=str, default="./data/mabe")
     parser.add_argument("--cache_path", type=str, default="./data/mabe/custom_dataset")
     parser.add_argument("--hoa_bins", type=int, default=32)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--num_workers", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=500)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=4e-5)
     parser.add_argument("--log_every_step", type=int, default=50)
+    parser.add_argument("--csv_path", type=str, required=True, help="Path to the CSV file containing the keypoint data.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # data
-    keypoints = load_data(args.data_root)
-    annotations, eval_utils = load_annotations(args.data_root)
+    keypoints = load_data(args.csv_path)
+    num_sequences = keypoints.shape[0]
+    annotations, eval_utils = load_annotations(args.data_root, num_sequences)
 
     dataset = KeypointsDataset(
         keypoints=keypoints,
@@ -206,7 +330,10 @@ def main():
         annotations=annotations,
         eval_utils=eval_utils
     )
+
     print("Number of sequences:", len(dataset))
+    print("Keypoints shape:", keypoints.shape)
+    print("Annotations:", annotations)
 
     # prepare dataloaders
     train_loader = DataLoader(
